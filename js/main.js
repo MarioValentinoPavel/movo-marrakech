@@ -50,26 +50,68 @@
     const ang = (s) => { const a = ride.getPointAtLength(Math.max(0, s - 6)), b = ride.getPointAtLength(Math.min(L, s + 6)); return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI; };
     return { L, rest: best, p0: ride.getPointAtLength(best), a0: ang(best), ang };
   })();
+  // coloca un scooter (el de la cabecera o el de la pantalla de carga) a la distancia s de su carretera
+  const placeScoot = (el, s) => {
+    const { p0, a0, ang } = rideInfo, p = ride.getPointAtLength(s);
+    el.setAttribute('transform', `translate(${(p.x - p0.x).toFixed(1)} ${(p.y - p0.y).toFixed(1)}) rotate(${(ang(s) - a0).toFixed(2)} ${REST.x} ${REST.y})`);
+  };
   function rideIn(from = 0) {
-    if (reduce || rideBusy) return;
+    if (reduce || rideBusy || !root.classList.contains('ld-done')) return;
     rideBusy = true;
-    const { rest, p0, a0, ang } = rideInfo;
-    const place = (s) => {
-      const p = ride.getPointAtLength(s);
-      scoot.setAttribute('transform', `translate(${(p.x - p0.x).toFixed(1)} ${(p.y - p0.y).toFixed(1)}) rotate(${(ang(s) - a0).toFixed(2)} ${REST.x} ${REST.y})`);
-    };
+    const { rest } = rideInfo;
     scoot.style.opacity = '0';
-    place(from);
-    tween(1700, (k) => { place(from + (rest - from) * k); scoot.style.opacity = String(Math.min(1, k * 6)); }).then(() => { scoot.removeAttribute('transform'); rideBusy = false; });
+    placeScoot(scoot, from);
+    tween(1700, (k) => { placeScoot(scoot, from + (rest - from) * k); scoot.style.opacity = String(Math.min(1, k * 6)); }).then(() => { scoot.removeAttribute('transform'); rideBusy = false; });
   }
   if (fine) $('.brand').addEventListener('mouseenter', () => rideIn(rideInfo.rest * 0.35));
 
-  /* ---------- arranque ---------- */
-  const start = () => {
-    root.classList.add('ready');
-    setTimeout(() => rideIn(0), reduce ? 0 : 450);
-  };
-  Promise.race([document.fonts ? document.fonts.ready : Promise.resolve(), new Promise((r) => setTimeout(r, 1200))]).then(() => requestAnimationFrame(start));
+  /* ---------- pantalla de carga y arranque ----------
+     El scooter del logo avanza por su carretera según lo que ya ha cargado (fuentes, foto de portada, página).
+     Al terminar, el logo vuela a la cabecera, el fondo se desvanece y la portada se abre desde el eje.
+     Se salta con un toque o una tecla. Con movimiento reducido no se muestra (lo decide el script del <head>). */
+  const ld = $('#ld'), ldSvg = $('#ld-logo .logo'), main = $('#main');
+  const finishLoad = () => { root.classList.add('ld-done'); main.removeAttribute('aria-busy'); };
+  if (ld && ldSvg && !root.classList.contains('ld-done')) {
+    const ldScoot = $('.lg-scoot', ldSvg);
+    const MIN = 1300, MAX = 3400; // ms desde el inicio de la navegación
+    let tasks = 0, shown = 0, leaving = false;
+    const TASKS = 3, done = () => { tasks++; };
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(done, done);
+    const heroImg = $('.hero-ph img');
+    if (heroImg.complete) done(); else { heroImg.addEventListener('load', done, { once: true }); heroImg.addEventListener('error', done, { once: true }); }
+    if (document.readyState === 'complete') done(); else addEventListener('load', done, { once: true });
+    placeScoot(ldScoot, 0);
+    const leave = () => {
+      if (leaving) return;
+      leaving = true;
+      placeScoot(ldScoot, rideInfo.rest);
+      ldScoot.removeAttribute('transform');
+      const a = ldSvg.getBoundingClientRect(), b = logo.getBoundingClientRect();
+      const s = b.width / a.width, dx = b.left + b.width / 2 - (a.left + a.width / 2), dy = b.top + b.height / 2 - (a.top + a.height / 2);
+      root.classList.add('ready');
+      const fly = ldSvg.animate([{ transform: 'translate(0px, 0px) scale(1)' }, { transform: `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${s.toFixed(4)})` }], { duration: 900, easing: 'cubic-bezier(.77,0,.175,1)', fill: 'forwards' });
+      ld.animate([{ backgroundColor: 'rgba(244, 238, 229, 1)' }, { backgroundColor: 'rgba(244, 238, 229, 0)' }], { duration: 650, delay: 250, easing: 'ease', fill: 'forwards' });
+      fly.finished.then(finishLoad, finishLoad);
+      setTimeout(finishLoad, 1400);
+    };
+    let last = performance.now();
+    const frame = () => {
+      if (leaving) return;
+      const now = performance.now(), dt = Math.min(120, now - last), ok = (tasks >= TASKS && now >= MIN) || now >= MAX;
+      last = now;
+      const target = ok ? 1 : Math.min(0.9, Math.max((tasks / TASKS) * 0.85, (now / MIN) * 0.55));
+      // suavizado por tiempo (no por fotograma): el mismo ritmo a 30, 60 o 120 Hz
+      shown += (target - shown) * (1 - Math.exp(-dt / (ok ? 140 : 260)));
+      placeScoot(ldScoot, rideInfo.rest * shown);
+      if (ok && shown > 0.994) leave(); else requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    ld.addEventListener('pointerdown', leave);
+    addEventListener('keydown', function skip() { removeEventListener('keydown', skip); leave(); });
+  } else {
+    finishLoad();
+    Promise.race([document.fonts ? document.fonts.ready : Promise.resolve(), new Promise((r) => setTimeout(r, 1200))]).then(() => requestAnimationFrame(() => root.classList.add('ready')));
+  }
 
   /* ---------- flota: el Torino se repinta (fotos alineadas al píxel), el Stunt funde ---------- */
   const COLORS = { rouge: ['Blanc et rouge', 'White and red', 'Blanco y rojo'], noir: ['Noir', 'Black', 'Negro'], turquoise: ['Turquoise', 'Turquoise', 'Turquesa'], gris: ['Gris clair', 'Light grey', 'Gris claro'] };
